@@ -591,7 +591,7 @@ ps3disk_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	bus_dma_segment_t *seg = &segs[0];
 	uint64_t devid = ps3bus_get_device(sc->sc_dev);
 	uint64_t block, bio_length, sector_op_count;
-	int i, err;
+	int err;
 
 	/* Locks already held by busdma */
 	PS3DISK_ASSERT_LOCKED(sc);

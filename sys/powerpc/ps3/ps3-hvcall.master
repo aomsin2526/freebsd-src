@@ -79,6 +79,7 @@ HVCALL	74	lv1_get_logical_partition_id		UNUSED				lpar_id
 HVCALL	78	lv1_get_spe_irq_outlet			spe_id,class			outlet
 HVCALL	79	lv1_set_spe_privilege_state_area_1_register	spe_id,offset,value
 HVCALL	91	lv1_get_repository_node_value		lpar_id,n1,n2,n3,n4		v1,v2
+HVCALL	92	lv1_modify_repository_node_value		lpar_id,n1,n2,n3,n4,v1,v2
 HVCALL	95	lv1_read_htab_entries			vas_id,slot	hi1,hi2,hi3,hi4,rcbits
 HVCALL	96	lv1_set_dabr				dabr,flags
 HVCALL	116	lv1_allocate_io_segment			ioas_id,seg_size,io_pagesize	ioif_addr

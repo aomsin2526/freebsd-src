@@ -291,3 +291,5 @@ include "std.debug"
 
 nooptions	WITNESS
 nooptions	WITNESS_SKIPSPIN
+
+options ZFS

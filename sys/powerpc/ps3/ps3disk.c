@@ -596,9 +596,6 @@ ps3disk_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	/* Locks already held by busdma */
 	PS3DISK_ASSERT_LOCKED(sc);
 
-	KASSERT(error == 0,
-		    ("DMA Error %d", error));
-
 	if (error) {
 		bp->bio_error = error;
 		bp->bio_flags |= BIO_ERROR;

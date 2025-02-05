@@ -78,6 +78,7 @@ int lv1_get_logical_partition_id(uint64_t *lpar_id);
 int lv1_get_spe_irq_outlet(uint64_t spe_id, uint64_t class, uint64_t *outlet);
 int lv1_set_spe_privilege_state_area_1_register(uint64_t spe_id, uint64_t offset, uint64_t value);
 int lv1_get_repository_node_value(uint64_t lpar_id, uint64_t n1, uint64_t n2, uint64_t n3, uint64_t n4, uint64_t *v1, uint64_t *v2);
+int lv1_modify_repository_node_value(uint64_t lpar_id, uint64_t n1, uint64_t n2, uint64_t n3, uint64_t n4, uint64_t v1, uint64_t v2);
 int lv1_read_htab_entries(uint64_t vas_id, uint64_t slot, uint64_t *hi1, uint64_t *hi2, uint64_t *hi3, uint64_t *hi4, uint64_t *rcbits);
 int lv1_set_dabr(uint64_t dabr, uint64_t flags);
 int lv1_allocate_io_segment(uint64_t ioas_id, uint64_t seg_size, uint64_t io_pagesize, uint64_t *ioif_addr);

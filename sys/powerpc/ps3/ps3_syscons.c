@@ -145,7 +145,7 @@ ps3fb_remap(void)
 
 	sc->fb_info.fb_pbase = fb_paddr;
 	for (va = 0; va < sc->fb_info.fb_size; va += PAGE_SIZE)
-		pmap_kenter_attr(0x10000000 + va, fb_paddr + va,
+		pmap_kenter_attr(sc->fb_info.fb_vbase + va, fb_paddr + va,
 		    VM_MEMATTR_WRITE_COMBINING);
 	sc->fb_info.fb_flags &= ~FB_FLAG_NOWRITE;
 }
@@ -215,10 +215,10 @@ ps3fb_init(struct vt_device *vd)
 	sc->fb_info.fb_bpp = sc->fb_info.fb_stride / sc->fb_info.fb_width * 8;
 
 	/*
-	 * Arbitrarily choose address for the framebuffer
+	 * Arbitrarily choose address for the framebuffer somewhere far away
 	 */
 
-	sc->fb_info.fb_vbase = 0x10000000;
+	sc->fb_info.fb_vbase = 0x80000000;
 	sc->fb_info.fb_flags |= FB_FLAG_NOWRITE; /* Not available yet */
 	sc->fb_info.fb_cmsize = 16;
 

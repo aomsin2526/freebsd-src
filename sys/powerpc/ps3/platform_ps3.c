@@ -118,6 +118,21 @@ ps3_probe(platform_t plat)
 	if (strncmp(compatible, "sony,ps3", sizeof(compatible)) != 0)
 		return (BUS_PROBE_NOWILDCARD);
 
+	/* Try to patch our LAID (LPAR Authority ID) to HV level */
+	/* It control access level of each LPAR */
+	/* If succeed, we will have full control of the system (such as RSX, BDEmu HDD, pcie) */
+	/* (Patched LV1 required) */
+
+	lv1_modify_repository_node_value(
+		PS3_LPAR_ID_PME,
+		lv1_repository_string("ss") >> 32,
+		lv1_repository_string("laid"),
+		2,
+		0,
+		0x1070000001000001, /* SCE_CELLOS_PME */
+		0
+	);
+
 	return (BUS_PROBE_SPECIFIC);
 }
 
@@ -253,7 +268,8 @@ ps3_smp_probe_threads(platform_t plat)
 static struct cpu_group *
 ps3_smp_topo(platform_t plat)
 {
-	return (smp_topo_1level(CG_SHARE_L1, 2, CG_FLAG_SMT));
+	/* Cell PPU core have two thread, single L2 cache */
+	return (smp_topo_1level(CG_SHARE_L2, 2, CG_FLAG_SMT));
 }
 #endif
 

@@ -57,7 +57,7 @@
 #include "ps3-hvcall.h"
 
 #define PS3DISK_LOCK_INIT(_sc)		\
-	mtx_init(&_sc->sc_mtx, device_get_nameunit(_sc->sc_dev), "ps3disk", MTX_DEF)
+	mtx_init(&_sc->sc_mtx, device_get_nameunit(_sc->sc_dev), "ps3disk", MTX_DEF | MTX_RECURSE)
 #define PS3DISK_LOCK_DESTROY(_sc)	mtx_destroy(&_sc->sc_mtx);
 #define PS3DISK_LOCK(_sc)		mtx_lock(&(_sc)->sc_mtx)
 #define	PS3DISK_UNLOCK(_sc)		mtx_unlock(&(_sc)->sc_mtx)
@@ -114,6 +114,7 @@ struct ps3disk_softc {
 	void *sc_irqctx;
 
 	struct disk **sc_disk;
+	char** sc_disk_d_names;
 
 	struct bio_queue_head sc_bioq;
 	struct bio_queue_head sc_deferredq;
@@ -158,9 +159,12 @@ ps3disk_attach(device_t dev)
 	struct ps3disk_softc *sc;
 	struct disk *d;
 	intmax_t mb;
-	uint64_t junk;
+	uint64_t port, junk;
 	char unit;
 	int i, err;
+
+	uint64_t bus_index = ps3bus_get_busidx(dev);
+	uint64_t dev_index = ps3bus_get_devidx(dev);
 
 	sc = device_get_softc(dev);
 	sc->sc_dev = dev;
@@ -231,6 +235,47 @@ ps3disk_attach(device_t dev)
 		goto fail_teardown_intr;
 	}
 
+	/* d_names */
+
+	sc->sc_disk_d_names = malloc(sc->sc_nregs * sizeof(char *),
+	    M_PS3DISK, M_ZERO | M_WAITOK);
+	if (!sc->sc_disk_d_names) {
+		device_printf(dev, "Could not allocate d_name pointers\n");
+		err = ENOMEM;
+		goto fail_free_sc_disk;
+	}
+
+	for (i = 0; i < sc->sc_nregs; i++) {
+		sc->sc_disk_d_names[i] = malloc(64, M_PS3DISK, M_ZERO | M_WAITOK);
+
+		if (!sc->sc_disk_d_names[i]) {
+			device_printf(dev, "Could not allocate d_name\n");
+			err = ENOMEM;
+			goto fail_free_sc_disk_d_names;
+		}
+	}
+
+	/* Query port id */
+
+	port = 0;
+
+	err = lv1_get_repository_node_value(
+		PS3_LPAR_ID_PME,
+		(lv1_repository_string("bus") >> 32) | bus_index,
+		lv1_repository_string("dev") | dev_index,
+		lv1_repository_string("port"),
+		0,
+		&port,
+		&junk
+	);
+
+	if (err)
+	{
+		device_printf(dev, "Could not query port\n");
+		err = ENXIO;
+		goto fail_free_sc_disk_d_names;
+	}
+
 	for (i = 0; i < sc->sc_nregs; i++) {
 		struct ps3disk_region *rp = &sc->sc_reg[i];
 
@@ -238,7 +283,7 @@ ps3disk_attach(device_t dev)
 		d->d_open = ps3disk_open;
 		d->d_close = ps3disk_close;
 		d->d_strategy = ps3disk_strategy;
-		d->d_name = "ps3disk";
+		//d->d_name = "ps3disk";
 		d->d_drv1 = sc;
 		d->d_maxsize = PAGE_SIZE;
 		d->d_sectorsize = sc->sc_blksize;
@@ -253,14 +298,18 @@ ps3disk_attach(device_t dev)
 			mb /= 1024;
 		}
 
+		snprintf(sc->sc_disk_d_names[i], 64, "ps3disk%lup", port);
+		d->d_name = sc->sc_disk_d_names[i];
+
 		/* Test to see if we can read this region */
+		/* BDEmu HDD will return LV1_WRONG_STATE if we have no permission */
 		err = lv1_storage_read(ps3bus_get_device(dev), d->d_unit,
 		    0, 0, rp->r_flags, 0, &junk);
-		device_printf(dev, "region %d %ju%cB%s\n", i, mb, unit,
-		    (err == LV1_DENIED_BY_POLICY) ?  " (hypervisor protected)"
+		device_printf(dev, "%s region %d %ju%cB%s\n", d->d_name, i, mb, unit,
+		    (err == LV1_DENIED_BY_POLICY || err == LV1_WRONG_STATE) ?  " (hypervisor protected)"
 		    : "");
 
-		if (err != LV1_DENIED_BY_POLICY)
+		if (err != LV1_DENIED_BY_POLICY && err != LV1_WRONG_STATE)
 			disk_create(d, DISK_VERSION);
 	}
 	err = 0;
@@ -273,6 +322,12 @@ ps3disk_attach(device_t dev)
 	sc->sc_running = 1;
 	return (0);
 
+fail_free_sc_disk_d_names:
+	for (i = 0; i < sc->sc_nregs; i++) {
+		free(sc->sc_disk_d_names[i], M_PS3DISK);
+	}
+fail_free_sc_disk:
+	free(sc->sc_disk, M_PS3DISK);
 fail_teardown_intr:
 	bus_teardown_intr(dev, sc->sc_irq, sc->sc_irqctx);
 fail_release_intr:
@@ -291,12 +346,18 @@ ps3disk_detach(device_t dev)
 	int i;
 
 	for (i = 0; i < sc->sc_nregs; i++)
+	{
 		disk_destroy(sc->sc_disk[i]);
+
+		free(sc->sc_disk_d_names[i], M_PS3DISK);
+	}
 
 	bus_dma_tag_destroy(sc->sc_dmatag);
 
 	bus_teardown_intr(dev, sc->sc_irq, sc->sc_irqctx);
 	bus_release_resource(dev, SYS_RES_IRQ, sc->sc_irqid, sc->sc_irq);
+
+	free(sc->sc_disk_d_names, M_PS3DISK);
 
 	free(sc->sc_disk, M_PS3DISK);
 	free(sc->sc_reg, M_PS3DISK);
@@ -372,11 +433,22 @@ ps3disk_strategy(struct bio *bp)
 	err = 0;
 	if (bp->bio_cmd == BIO_FLUSH) {
 		bp->bio_driver1 = 0;
-		err = lv1_storage_send_device_command(
-		    ps3bus_get_device(sc->sc_dev), LV1_STORAGE_ATA_HDDOUT,
-		    0, 0, 0, 0, (uint64_t *)&bp->bio_driver2);
-		if (err == LV1_BUSY)
-			err = EAGAIN;
+
+		/* if busy, keep retry until we succeed */
+		while (1) {
+			err = lv1_storage_send_device_command(
+				ps3bus_get_device(sc->sc_dev), LV1_STORAGE_ATA_HDDOUT,
+				0, 0, 0, 0, (uint64_t *)&bp->bio_driver2);
+
+			if (err != LV1_BUSY) {
+				err = (err == 0) ? 0 : EINVAL;
+				break;
+			}
+
+			/* process completed request now, this improve performance greatly */
+			/* increased from 5MB/s to 50MB/s */
+			ps3disk_intr(sc);
+		}
 	} else if (bp->bio_cmd == BIO_READ || bp->bio_cmd == BIO_WRITE) {
 		if (bp->bio_bcount % sc->sc_blksize != 0) {
 			err = EINVAL;
@@ -415,49 +487,58 @@ ps3disk_intr(void *arg)
 	uint64_t devid = ps3bus_get_device(dev);
 	struct bio *bp;
 	uint64_t tag, status;
+	int err;
 
-	if (lv1_storage_get_async_status(devid, &tag, &status) != 0)
+	err = lv1_storage_get_async_status(devid, &tag, &status);
+
+	if (err != 0)
 		return;
 
 	PS3DISK_LOCK(sc);
 
-	DPRINTF(sc, PS3DISK_DEBUG_INTR, "%s: tag 0x%016lx "
-	    "status 0x%016lx\n", __func__, tag, status);
+	while (err == 0) {
+		DPRINTF(sc, PS3DISK_DEBUG_INTR, "%s: tag 0x%016lx "
+		    "status 0x%016lx\n", __func__, tag, status);
 
-	/* Locate the matching request */
-	TAILQ_FOREACH(bp, &sc->sc_bioq.queue, bio_queue) {
-		if ((uint64_t)bp->bio_driver2 != tag)
-			continue;
+		/* Locate the matching request */
+		TAILQ_FOREACH(bp, &sc->sc_bioq.queue, bio_queue) {
+			if ((uint64_t)bp->bio_driver2 != tag)
+				continue;
 
-		if (status != 0) {
-			device_printf(sc->sc_dev, "%s error (%#lx)\n",
-			    (bp->bio_cmd == BIO_READ) ? "Read" : "Write",
-			    status);
-			bp->bio_error = EIO;
-			bp->bio_flags |= BIO_ERROR;
-		} else {
-			bp->bio_error = 0;
-			bp->bio_resid = 0;
-			bp->bio_flags |= BIO_DONE;
+			if (status != 0) {
+				device_printf(sc->sc_dev, "%s error (%#lx)\n",
+					(bp->bio_cmd == BIO_READ) ? "Read" : "Write",
+					status);
+				bp->bio_error = EIO;
+				bp->bio_flags |= BIO_ERROR;
+			} else {
+				bp->bio_error = 0;
+				bp->bio_resid = 0;
+				bp->bio_flags |= BIO_DONE;
+			}
+
+			if (bp->bio_driver1 != NULL) {
+				if (bp->bio_cmd == BIO_READ)
+					bus_dmamap_sync(sc->sc_dmatag, (bus_dmamap_t)
+						bp->bio_driver1, BUS_DMASYNC_POSTREAD);
+
+				bus_dmamap_unload(sc->sc_dmatag, (bus_dmamap_t)
+					bp->bio_driver1);
+				bus_dmamap_destroy(sc->sc_dmatag, (bus_dmamap_t)
+					bp->bio_driver1);
+			}
+
+			bioq_remove(&sc->sc_bioq, bp);
+			biodone(bp);
+
+			break;
 		}
 
-		if (bp->bio_driver1 != NULL) {
-			if (bp->bio_cmd == BIO_READ)
-				bus_dmamap_sync(sc->sc_dmatag, (bus_dmamap_t)
-				    bp->bio_driver1, BUS_DMASYNC_POSTREAD);
-			bus_dmamap_unload(sc->sc_dmatag, (bus_dmamap_t)
-			    bp->bio_driver1);
-			bus_dmamap_destroy(sc->sc_dmatag, (bus_dmamap_t)
-			    bp->bio_driver1);
-		}
-
-		bioq_remove(&sc->sc_bioq, bp);
-		biodone(bp);
-		break;
+		err = lv1_storage_get_async_status(devid, &tag, &status);
 	}
 
 	if (bioq_first(&sc->sc_deferredq) != NULL)
-		wakeup(&sc->sc_deferredq);
+			wakeup(&sc->sc_deferredq);
 
 	PS3DISK_UNLOCK(sc);
 }
@@ -589,12 +670,16 @@ ps3disk_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	struct bio *bp = (struct bio *)(arg);
 	struct ps3disk_softc *sc = (struct ps3disk_softc *)bp->bio_disk->d_drv1;
 	struct ps3disk_region *rp = &sc->sc_reg[bp->bio_disk->d_unit];
+	bus_dma_segment_t *seg = &segs[0];
 	uint64_t devid = ps3bus_get_device(sc->sc_dev);
-	uint64_t block;
-	int i, err;
+	uint64_t block, bio_length, sector_op_count;
+	int err;
 
 	/* Locks already held by busdma */
 	PS3DISK_ASSERT_LOCKED(sc);
+
+	KASSERT(error == 0,
+		    ("DMA Error %d", error));
 
 	if (error) {
 		bp->bio_error = error;
@@ -604,49 +689,70 @@ ps3disk_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 		return;
 	}
 
-	block = bp->bio_pblkno;
-	for (i = 0; i < nsegs; i++) {
-		KASSERT((segs[i].ds_len % sc->sc_blksize) == 0,
-		    ("DMA fragments not blocksize multiples"));
+	/* supports only 1 segment */
 
+	KASSERT(nsegs == 1,
+		    ("nsegs must be 1!, %d", nsegs));
+
+	block = bp->bio_pblkno;
+	bio_length = bp->bio_length;
+
+	/* ds_len always >= bio_length */
+
+	KASSERT((seg->ds_len % bio_length) == 0,
+		    ("ds_len not bio_length multiples, %lu, %lu", (uint64_t)seg->ds_len, bio_length));
+
+	KASSERT((bio_length % sc->sc_blksize) == 0,
+		    ("bio_length not blocksize multiples, %lu, %lu", bio_length, (uint64_t)sc->sc_blksize));
+
+	sector_op_count = bio_length / sc->sc_blksize;
+
+	/* if busy, keep retry until we succeed */
+	while (1) {
 		if (bp->bio_cmd == BIO_READ) {
 			err = lv1_storage_read(devid, rp->r_id,
-			    block, segs[i].ds_len/sc->sc_blksize,
-			    rp->r_flags, segs[i].ds_addr,
-			    (uint64_t *)&bp->bio_driver2);
+					block, sector_op_count,
+					rp->r_flags, seg->ds_addr,
+					(uint64_t *)&bp->bio_driver2);
 		} else {
 			bus_dmamap_sync(sc->sc_dmatag,
-			    (bus_dmamap_t)bp->bio_driver1,
-			    BUS_DMASYNC_PREWRITE);
+				(bus_dmamap_t)bp->bio_driver1,
+				BUS_DMASYNC_PREWRITE);
+
 			err = lv1_storage_write(devid, rp->r_id,
-			    block, segs[i].ds_len/sc->sc_blksize,
-			    rp->r_flags, segs[i].ds_addr,
-			    (uint64_t *)&bp->bio_driver2);
+				block, sector_op_count,
+				rp->r_flags, seg->ds_addr,
+				(uint64_t *)&bp->bio_driver2);
 		}
 
-		if (err) {
-			if (err == LV1_BUSY) {
-				bioq_remove(&sc->sc_bioq, bp);
-				bioq_insert_tail(&sc->sc_deferredq, bp);
-			} else {
-				bus_dmamap_unload(sc->sc_dmatag, (bus_dmamap_t)
-				    bp->bio_driver1);
-				bus_dmamap_destroy(sc->sc_dmatag, (bus_dmamap_t)
-				    bp->bio_driver1);
-				device_printf(sc->sc_dev, "Could not read "
-				    "sectors (0x%08x)\n", err);
-				bp->bio_error = EINVAL;
-				bp->bio_flags |= BIO_ERROR;
-				bioq_remove(&sc->sc_bioq, bp);
-				biodone(bp);
-			}
-
+		if (err != LV1_BUSY)
 			break;
-		}
 
-		DPRINTF(sc, PS3DISK_DEBUG_READ, "%s: tag 0x%016lx\n",
-		    __func__, sc->sc_bounce_tag);
+		/* process completed request now, this improve performance greatly */
+		/* increased from 5MB/s to 50MB/s */
+		ps3disk_intr(sc);
 	}
+
+	if (err) {
+		if (err == LV1_BUSY) {
+			bioq_remove(&sc->sc_bioq, bp);
+			bioq_insert_tail(&sc->sc_deferredq, bp);
+		} else {
+			bus_dmamap_unload(sc->sc_dmatag, (bus_dmamap_t)
+			    bp->bio_driver1);
+			bus_dmamap_destroy(sc->sc_dmatag, (bus_dmamap_t)
+			    bp->bio_driver1);
+			device_printf(sc->sc_dev, "Could not read "
+			    "sectors (0x%08x)\n", err);
+			bp->bio_error = EINVAL;
+			bp->bio_flags |= BIO_ERROR;
+			bioq_remove(&sc->sc_bioq, bp);
+			biodone(bp);
+		}
+	}
+
+	DPRINTF(sc, PS3DISK_DEBUG_READ, "%s: tag 0x%016lx\n",
+		__func__, sc->sc_bounce_tag);
 }
 
 #ifdef PS3DISK_DEBUG

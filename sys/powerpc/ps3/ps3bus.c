@@ -377,6 +377,10 @@ ps3bus_attach(device_t self)
 			if (result != 0)
 				continue;
 			
+			/* skip cdrom because that driver is broken anyway, and to give away dma space to something useful */
+			if (devtype == PS3_DEVTYPE_CDROM)
+				continue;
+
 			switch (devtype) {
 			case PS3_DEVTYPE_USB:
 				/* USB device has OHCI and EHCI USB host controllers */
@@ -655,20 +659,35 @@ ps3bus_get_dma_tag(device_t dev, device_t child)
 	    dinfo->devtype == PS3_DEVTYPE_USB)
 		flags = 2; /* 8-bit mode */
 
+	/* must group all region sizes into single allocation call, or it will fail on 512MB ram models */
+	/* and must use 16MB page size for all types */
 	pagesize = 24; /* log_2(16 MB) */
-	if (dinfo->bustype == PS3_BUSTYPE_STORAGE)
-		pagesize = 12; /* 4 KB */
+
+	uint64_t dma_total_size = 0;
+	uint64_t dma_base = 0;
 
 	for (i = 0; i < sc->rcount; i++) {
-		err = lv1_allocate_device_dma_region(dinfo->bus, dinfo->dev,
-		    sc->regions[i].mr_size, pagesize, flags,
-		    &dinfo->dma_base[i]);
-		if (err != 0) {
-			device_printf(child,
-			    "could not allocate DMA region %d: %d\n", i, err);
-			goto fail;
-		}
+		dma_total_size += sc->regions[i].mr_size;
+	}
 
+	err = lv1_allocate_device_dma_region(dinfo->bus, dinfo->dev,
+		    dma_total_size, pagesize, flags,
+		    &dma_base);
+
+	if (err != 0) {
+		device_printf(child,
+			"could not allocate DMA size: %lu, err: %d\n", dma_total_size, err);
+		goto fail;
+	}
+
+	uint64_t cur_dma_base = dma_base;
+
+	for (i = 0; i < sc->rcount; i++) {
+		dinfo->dma_base[i] = cur_dma_base;
+		cur_dma_base += sc->regions[i].mr_size;
+	}
+
+	for (i = 0; i < sc->rcount; i++) {
 		err = lv1_map_device_dma_region(dinfo->bus, dinfo->dev,
 		    sc->regions[i].mr_start, dinfo->dma_base[i],
 		    sc->regions[i].mr_size,

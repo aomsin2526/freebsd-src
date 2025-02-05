@@ -505,6 +505,19 @@ ASENTRY(lv1_get_repository_node_value)
 	blr
 ASEND(lv1_get_repository_node_value)
 
+ASENTRY(lv1_modify_repository_node_value)
+	mflr	%r0
+	std	%r0,16(%r1)
+	stdu	%r1,-32(%r1)
+	li	%r11,92
+	hc
+	extsw	%r3,%r3
+	ld	%r1,0(%r1)
+	ld	%r0,16(%r1)
+	mtlr	%r0
+	blr
+ASEND(lv1_modify_repository_node_value)
+
 ASENTRY(lv1_read_htab_entries)
 	mflr	%r0
 	std	%r0,16(%r1)

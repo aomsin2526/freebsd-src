@@ -2369,7 +2369,6 @@ mmu_radix_bootstrap(vm_offset_t start, vm_offset_t end)
 		printf("%s done\n", __func__);
 	pmap_bootstrapped = 1;
 	dmaplimit = roundup2(powerpc_ptob(Maxmem), L2_PAGE_SIZE);
-	PCPU_SET(flags, PCPU_GET(flags) | PC_FLAG_NOSRS);
 }
 
 static void

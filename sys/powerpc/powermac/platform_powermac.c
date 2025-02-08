@@ -409,7 +409,7 @@ powermac_register_timebase(device_t dev, powermac_tb_disable_t cb)
 static void
 powermac_smp_timebase_sync(platform_t plat, u_long tb, int ap)
 {
-	static volatile bool tb_ready;
+	static volatile int tb_ready;
 	static volatile int cpu_done;
 
 	/*
@@ -425,27 +425,27 @@ powermac_smp_timebase_sync(platform_t plat, u_long tb, int ap)
 	if (ap) {
 		/* APs.  Hold off until we get a stable timebase. */
 		critical_enter();
-		while (!tb_ready)
+		while (atomic_load_acq_int(&tb_ready) < 1)
 			atomic_thread_fence_seq_cst();
 		mttb(tb);
-		atomic_add_int(&cpu_done, 1);
-		while (cpu_done < mp_ncpus)
+		atomic_add_rel_int(&cpu_done, 1);
+		while (atomic_load_acq_int(&cpu_done) < mp_ncpus)
 			atomic_thread_fence_seq_cst();
 		critical_exit();
 	} else {
 		/* BSP */
 		critical_enter();
 		/* Ensure cpu_done is zeroed so we can resync at runtime */
-		atomic_set_int(&cpu_done, 0);
+		atomic_set_rel_int(&cpu_done, 0);
 		freeze_timebase(powermac_tb_dev, true);
-		tb_ready = true;
+		atomic_set_rel_int(&tb_ready, 1);
 		mttb(tb);
-		atomic_add_int(&cpu_done, 1);
-		while (cpu_done < mp_ncpus)
+		atomic_add_rel_int(&cpu_done, 1);
+		while (atomic_load_acq_int(&cpu_done) < mp_ncpus)
 			atomic_thread_fence_seq_cst();
 		freeze_timebase(powermac_tb_dev, false);
 		/* Reset tb_ready so we can resync at runtime */
-		tb_ready = false;
+		atomic_set_rel_int(&tb_ready, 0);
 		critical_exit();
 	}
 }

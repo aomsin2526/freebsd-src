@@ -75,7 +75,9 @@ if [ -n "$bootable" ]; then
 	# Apple boot code
 	uudecode -p "`dirname "$0"`/hfs-boot.bz2.uu" | bunzip2 > $BOOTBLOCK
 	OFFSET=$(hd $BOOTBLOCK | grep 'Loader START' | cut -f 1 -d ' ')
-	OFFSET=0x$(echo 0x$OFFSET | awk '{printf("%x\n",$1/512);}')
+	# Note: awk as of 15.0 doesn't handle a hex number input
+	OFFSET=$(printf "%d" 0x${OFFSET})
+	OFFSET=0x$(echo $OFFSET | awk '{printf("%x\n",$1/512);}')
 	dd if="$BASEBITSDIR/boot/loader" of=$BOOTBLOCK seek=$OFFSET conv=notrunc
 
 	bootable="-o bootimage=macppc;$BOOTBLOCK -o no-emul-boot"

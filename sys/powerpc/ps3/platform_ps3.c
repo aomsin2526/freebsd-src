@@ -117,6 +117,21 @@ ps3_probe(platform_t plat)
 	if (strncmp(compatible, "sony,ps3", sizeof(compatible)) != 0)
 		return (BUS_PROBE_NOWILDCARD);
 
+	/* Try to patch our LAID (LPAR Authority ID) to HV level */
+	/* It control access level of each LPAR */
+	/* If succeed, we will have full control of the system (such as RSX, BDEmu HDD, pcie) */
+	/* (Patched LV1 required) */
+
+	lv1_modify_repository_node_value(
+		PS3_LPAR_ID_PME,
+		lv1_repository_string("ss") >> 32,
+		lv1_repository_string("laid"),
+		2,
+		0,
+		0x1070000001000001, /* SCE_CELLOS_PME */
+		0
+	);
+
 	return (BUS_PROBE_SPECIFIC);
 }
 
